@@ -2,59 +2,37 @@
 
 **MedParse: A Task-Specialized Vision-Language Framework for Medical Image Parsing**
 
-MedParse is a four-task medical image parsing pipeline built on a shared
-MedGemma vision-language backbone. One image and one task question are mapped
-to a classification option, a label set, image-space boxes, or a bounded scalar.
-This repository is the public implementation accompanying the paper.
+MedParse combines a shared MedGemma representation with task-specific
+predictors for classification, multi-label prediction, detection, and
+regression. This repository accompanies the FLARE 2026 Task 3 paper.
 
 External checkpoint names and schemas are documented in
 [checkpoints/README.md](checkpoints/README.md).
 
-## Environments and Requirements
+## Installation
 
-| Component | Setting |
-| --- | --- |
-| OS | Linux x86_64 |
-| Python | 3.12.3 |
-| Development accelerator | PPU-ZW810E, 96 GiB |
-| Qualification accelerator | NVIDIA A10 |
-| CUDA | 12.9 |
-| Dependencies | `requirements.txt`, `pyproject.toml` |
-
-Install the runtime and development dependencies with:
+Install the runtime and optional test dependencies with:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-pip install -e .
 pip install -e ".[dev]"
 ```
 
-One local qualification replay used an NVIDIA A10 for 1,783 inputs and
-completed in 3,802 s (about 63.4 min). Peak host-sampled GPU memory was
-21,797 MiB (about 21.3 GiB); peak resident memory was 19,554,471,936 bytes
-(about 18.2 GiB). This local replay is distinct from the organizer-reported
-runtime in the official leaderboard below.
-
 ## Dataset
 
-FLARE challenge data and images are obtained by the user under the organizer's
-access and licensing terms; they are not included here. The public inference
-input is unlabeled JSONL (a JSON list is also accepted), with one local image
-per row:
+Challenge data are not included; obtain them under the organizers' access and
+licensing terms. Inference accepts an unlabeled JSONL manifest, for example:
 
 ```json
 {"uid":"case-001","task_type":"classification","dataset":"fundus","prompt":"...","images":["/path/to/image.png"]}
 ```
 
-Supported task types are `classification`, `multi_label_classification`,
-`detection`, and `regression`. Each row has a unique UID, a dataset/source,
-one question or prompt, and exactly one image. Training labels use a separate
-contract. Inputs must not include answer, target, label, reference, or
-prediction fields; detection predictions use original-image `[x1,y1,x2,y2]`
-boxes. `scripts/prepare_data.py` performs manifest validation and normalization.
+Supported tasks are `classification`, `multi_label_classification`,
+`detection`, and `regression`. `scripts/prepare_data.py` validates and
+normalizes manifests; it does not preprocess images or create learned assets.
 
 The paper reports the following task-specific labeled development resources.
 Rows are question records and unique references are manifest image-reference
@@ -71,16 +49,15 @@ counts; neither is a patient count.
 | REG | Train | 5,852 | 3,277 | Ultrasound 5,150; X-ray 702 |
 | REG | Public validation | -- | -- | No public labeled regression manifest reported |
 
-These are task-specific resources, not one homogeneous cohort. Counts are not
-patient counts. Labeled public validation data support development where
-available; no public labeled regression validation manifest is reported here.
-Challenge images and labels are not redistributed.
+These are task-specific resources, not one homogeneous cohort. Rows are
+question records and unique references are image identifiers, not patient
+counts. No public labeled regression validation manifest is reported.
 
 The BUS-UCLM/BUSI ultrasound data form a separate 175-case labeled cohort for
 the Detection study. This cohort is not the organizer's hidden Detection split
 and is not part of the official hidden-test results.
 
-## Preprocessing
+## Preprocessing and Method
 
 Classification, multi-label classification, and Detection use EXIF-corrected
 RGB images resized to `896 x 896` with BICUBIC resampling. Regression combines
@@ -88,7 +65,7 @@ the original image with overlapping aspect-ratio crops or four quadrant crops
 for near-square images. Its 960-dimensional geometry descriptor uses grayscale,
 BILINEAR resizing, intensity scaling, and reflected-boundary Sobel derivatives.
 
-Prepare an unlabeled local manifest with:
+To validate and normalize a manifest:
 
 ```bash
 python scripts/prepare_data.py \
@@ -97,14 +74,7 @@ python scripts/prepare_data.py \
   --image-root /path/to/images
 ```
 
-Manifest preparation validates and normalizes references; it is not source
-image preprocessing and does not create learned assets.
-
-## Method Overview
-
-The implementation shares a MedGemma representation interface and adds four
-task-specific predictors. The mapping below links each paper component to its
-primary implementation.
+The implementation of each paper component is located here:
 
 | Component | Function | Primary code |
 | --- | --- | --- |
@@ -114,39 +84,20 @@ primary implementation.
 | Spatial query decoding | Box prediction from image tokens and decoder states | `src/medical_parsing/tasks/detection.py` |
 | Retrieval-refined quantile regression | Visual, retrieval, residual, and quantile refinement to `[0,100]` | `src/medical_parsing/tasks/regression.py` |
 
-## Training
+## Fitting Components
 
-`train.py` fits downstream components from user-owned labeled arrays or feature
-caches. The public components are:
-
-| Component | Input | Output |
-| --- | --- | --- |
-| `classification-head` | token NPZ + semantic-label JSONL | `classification_heads.pt` |
-| `detection-head` | image-token/query-state NPZ + normalized targets | `spatial_query_decoder.pt` |
-| `multilabel-selector-ranker` | selector/ranker features and targets | selector and ranker CatBoost files |
-| `multilabel-probability-models` | features + `[N,10,4]` targets | `multilabel_probability_models.joblib` |
-| `multilabel-residual-head` | tokens, row features, probabilities, targets | `multilabel_residual_head.pt` |
-| `regression-visual-estimator` | visual features + scalar targets | `regression_visual_model.joblib` |
-| `regression-reference` | visual/geometry features + targets, UIDs, groups | `regression_reference.joblib` |
-| `regression-residuals` | UID-aligned residual values | `regression_residuals.npz` |
-| `regression-quantile-head` | tokens, geometry, scalar targets | `regression_quantile_head.pt` |
-
-Fit a component using its CLI name and feature/target inputs:
+`train.py` fits supported downstream components from user-provided labeled
+features. Consult its help and the checkpoint contract for component inputs and
+asset schemas. The generic adapter trainer does not reproduce the final
+competition LoRA adapters.
 
 ```bash
 python train.py --component <component> [component options]
 ```
 
-Detection fitting defaults are 30 epochs, batch size 256, AdamW with learning
-rate `1e-3` and weight decay `1e-4`, 5% warmup, and cosine decay. See
-`python train.py --help` and [checkpoints/README.md](checkpoints/README.md) for
-all component options, serialized keys, and feature producers. The generic
-`src/medical_parsing/training/adapters.py` helper does not claim to reproduce
-the final competition LoRA adapters.
-
 ## Inference
 
-Run the contract smoke test without external models or checkpoints:
+Run a contract smoke test without external models or checkpoints:
 
 ```bash
 python scripts/prepare_smoke_data.py --output-dir .smoke
@@ -253,26 +204,6 @@ The generic adapter-training helper does not reproduce the final competition
 adapters. The checkpoint README documents required files and schemas; official
 scores require the organizer's evaluator.
 
-## Repository Structure
-
-```text
-configs/default.yaml      Runtime defaults and reference contracts
-checkpoints/README.md     External asset names and schemas
-src/medical_parsing/      Package implementation
-  data/                   Manifest preparation
-  evaluation/             Local metrics
-  inference/              Four-task orchestration
-  models/                 Backbone and neural modules
-  tasks/                  Task implementations
-  training/               Component fitting
-tests/                    Contract and behavior tests
-scripts/                  Manifest and smoke-data utilities
-tools/                    Feature and target preparation utilities
-inference.py              Public inference CLI
-train.py                  Public fitting CLI
-evaluate.py               Local evaluation CLI
-```
-
 ## Contributing
 
 Open an issue for a reproducibility problem or a narrowly scoped bug. Before a
@@ -282,38 +213,19 @@ local machine paths.
 
 ## Citation
 
-For the paper, cite the manuscript as follows (publication and DOI metadata
-are not asserted here):
-
 ```bibtex
-@misc{luan2026medparse,
+@misc{medparse2026,
   author = {Luan, Xiao and Tang, Ai and Yuan, Wei and Zhang, Fuyou},
   title   = {MedParse: A Task-Specialized Vision-Language Framework for
              Medical Image Parsing},
-  year   = {2026},
-  note   = {FLARE 2026 Task 3 manuscript}
-}
-```
-
-For the software release, use:
-
-```bibtex
-@software{medparse2026software,
-  author  = {Luan, Xiao and Tang, Ai and Yuan, Wei and Zhang, Fuyou},
-  title   = {MedParse: A Task-Specialized Vision-Language Framework for
-             Medical Image Parsing},
-  version = {0.1.0},
+  year    = {2026},
+  note    = {FLARE 2026 Task 3 paper and software},
   url     = {https://github.com/tangaii/MedParse}
 }
 ```
 
-Machine-readable software citation metadata is provided in
+Machine-readable citation metadata is provided in
 [CITATION.cff](CITATION.cff).
-
-## Acknowledgement
-
-We thank the FLARE 2026 organizers and data contributors and acknowledge the
-MedGemma model and the open-source software used in this work.
 
 ## License
 
