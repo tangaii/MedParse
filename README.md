@@ -34,9 +34,11 @@ pip install -e .
 pip install -e ".[dev]"
 ```
 
-The qualification run used an NVIDIA A10 for 1,783 inputs and completed in
-3,802 s (about 63.4 min). Peak host-sampled GPU memory was 21,797 MiB (about
-21.3 GiB); peak resident memory was 19,554,471,936 bytes (about 18.2 GiB).
+One local qualification replay used an NVIDIA A10 for 1,783 inputs and
+completed in 3,802 s (about 63.4 min). Peak host-sampled GPU memory was
+21,797 MiB (about 21.3 GiB); peak resident memory was 19,554,471,936 bytes
+(about 18.2 GiB). This local replay is distinct from the organizer-reported
+runtime in the official leaderboard below.
 
 ## Dataset
 
@@ -56,9 +58,30 @@ contract. Inputs must not include answer, target, label, reference, or
 prediction fields; detection predictions use original-image `[x1,y1,x2,y2]`
 boxes. `scripts/prepare_data.py` performs manifest validation and normalization.
 
+The paper reports the following task-specific labeled development resources.
+Rows are question records and unique references are manifest image-reference
+counts; neither is a patient count.
+
+| Task | Split | Rows | Unique refs | Modality (rows) |
+| --- | --- | ---: | ---: | --- |
+| CLS | Train | 16,971 | 23,389 | Digital Camera 596; Dermoscopy 2,860; Endoscopy 64; Fundus 1,380; Mammography 3,583; Microscopy 722; Retinography 1,113; Ultrasound 2,447; X-ray 4,206 |
+| CLS | Public validation | 2,387 | 4,975 | Digital Camera 149; Dermoscopy 716; Endoscopy 16; Mammography 910; Retinography 279; Ultrasound 317 |
+| MLC | Train | 7,134 | 5,499 | X-ray 7,134 |
+| MLC | Public validation | 970 | 970 | X-ray 970 |
+| DET | Train | 5,885 | 3,310 | Ultrasound 5,885 |
+| DET | Public validation | 175 | 175 | Ultrasound 175 |
+| REG | Train | 5,852 | 3,277 | Ultrasound 5,150; X-ray 702 |
+| REG | Public validation | -- | -- | No public labeled regression manifest reported |
+
+These are task-specific resources, not one homogeneous image cohort. The
+training records support fitting task-specific components; labeled public
+validation data support development and evaluation where available. The paper
+reports no public labeled regression validation manifest in this summary. No
+challenge images or labels are redistributed by this repository.
+
 The BUS-UCLM/BUSI ultrasound data form a separate 175-case labeled cohort for
 the Detection study. This cohort is not the organizer's hidden Detection split
-and is not included in the 1,703-row validation-hidden artifact.
+and is not part of the official hidden-test results.
 
 ## Preprocessing
 
@@ -207,19 +230,72 @@ scorer.
 
 ## Results
 
-The source-locked validation-hidden artifact contains 1,703 rows.
+### Official FLARE 2026 Task 3 results
+
+The organizer evaluated the submitted system on the hidden test set. MedParse,
+submitted as `lightbridge`, ranked second overall. The full six-team
+leaderboard reported in the paper is reproduced here; runtime is the
+organizer-reported value in seconds.
+
+| Team | CLS BA | MLC F1 | DET F1 | REG MAE | Runtime (s) | Overall rank |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Hexapus | 0.8585 | 0.5310 | 0.8633 | 18.5286 | 6162 | 1 |
+| **lightbridge (MedParse)** | **0.8204** | **0.5366** | **0.7267** | **15.1703** | **5659** | **2** |
+| AIMHI | 0.8313 | 0.4694 | 0.6900 | 19.8822 | 1606 | 3 |
+| LIST-SEU | 0.8507 | 0.4809 | 0.5633 | 17.3954 | 3774 | 4 |
+| MedCat | 0.7446 | 0.4663 | 0.6400 | 18.5188 | 1450 | 5 |
+| MedGemma1.5-FLARE | 0.7502 | 0.4430 | 0.6300 | 19.0979 | 1033 | 6 |
+
+Higher BA/F1 and lower MAE/runtime are better. Official challenge scores are
+reported by the organizers; `evaluate.py` is a local evaluator and is not the
+organizer's scorer.
+
+### Labeled development diagnostics
+
+The paper also reports local comparisons on labeled development data. These
+diagnostics use different task-specific protocols and must not be interpreted
+as official hidden-test results or as one uniform four-task test set.
+
+| Task | Evaluation unit | Comparison | Result |
+| --- | --- | --- | --- |
+| CLS | 5,151 records / 2,275 image groups | Direct vs. routed | BA 0.644420 vs. 0.764283; paired delta +0.119863 (95% CI 0.090796 to 0.150539) |
+| MLC | 2,605 records / 1,266 image groups | Direct vs. candidate refinement | Micro-F1 0.551832 vs. 0.562904; paired delta +0.011072 (95% CI 0.004984 to 0.017257) |
+| MLC | Same grouped OOF records | Non-GFM control vs. GFM | Micro-F1 0.544443 vs. 0.551820; paired delta +0.007377 (95% CI 0.003663 to 0.010966) |
+| MLC | Same grouped OOF records | GFM vs. residual surrogate | Micro-F1 0.551820 vs. 0.548789; paired delta -0.003031 (95% CI -0.005126 to -0.000781) |
+| REG | 561 source OOF rows | G4; Q50; Q75 | MAE 13.246975; 12.852755; 12.754508. Q75-Q50 delta -0.098247 (95% CI -0.251303 to 0.056902) |
+| DET | 59-case holdout | Generated coordinates vs. spatial query | F1 at IoU 0.5: 0.158730 vs. 0.464000; paired delta +0.305270 (95% CI 0.173565 to 0.433353) |
+
+The CLS comparison uses a different prompt in the historical direct-prediction
+configuration, so it is not an isolated routing ablation. The MLC candidate
+refinement uses fold-local ExtraTrees models; its probability and residual
+comparisons use Logistic/Ridge surrogate components, not the production
+CatBoost selector/ranker and neural residual head. The full residual-surrogate
+score does not establish an improvement over direct generation.
+
+For Detection, 116 public development cases were used for configuration
+selection and 59 cases formed the separate holdout. The combined 175-case
+public cohort includes those 116 development cases: spatial-query F1 was
+0.453552 and generated-coordinate baseline F1 was 0.200542 on that combined
+cohort. The 175-case result is descriptive and is not an independent holdout
+estimate. Both public-cohort results are separate from the official hidden-test
+Detection F1 of 0.7267.
+
+### Earlier development artifact
+
+An earlier reported source-locked development diagnostic used 1,703 rows.
+These historical local scores are distinct from the organizer's final
+hidden-test results and from the task-specific diagnostics above.
 
 | Source | Task | Rows | Metric | Result |
 | --- | --- | ---: | --- | ---: |
-| Validation-hidden artifact | Overall | 1,703 | overall score | 0.483753 |
-| Validation-hidden artifact | Classification | 1,126 | balanced accuracy | 0.847607 |
-| Validation-hidden artifact | Multi-label classification | 477 | micro-F1 | 0.526655 |
-| Validation-hidden artifact | Regression | 100 | MAE | 11.987337 |
-| Separate labeled ultrasound cohort | Detection | 175 | F1 at IoU 0.5 | 0.453552 |
-| Separate labeled ultrasound cohort | Detection baseline | 175 | F1 at IoU 0.5 | 0.200542 |
+| Earlier development artifact | Overall | 1,703 | overall score | 0.483753 |
+| Earlier development artifact | Classification | 1,126 | balanced accuracy | 0.847607 |
+| Earlier development artifact | Multi-label classification | 477 | micro-F1 | 0.526655 |
+| Earlier development artifact | Regression | 100 | MAE | 11.987337 |
 
-The 175-case Detection result is a separate cohort and is not part of the
-1,703-row denominator. Final testing-set evaluation remains pending.
+The separate ultrasound Detection cohort is not part of the 1,703-row
+artifact. The official final evaluation has been completed by the challenge
+organizers, as reported above.
 
 ## Reproducibility Notes
 
