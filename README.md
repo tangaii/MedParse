@@ -27,8 +27,9 @@ JSONL manifest with one image per record:
 {"uid":"case-001","task_type":"classification","dataset":"fundus","prompt":"...","images":["/path/to/image.png"]}
 ```
 
-Supported task types are `classification`, `multi_label_classification`,
-`detection`, and `regression`. Validate and normalize a manifest with:
+Set the task_type field to one of these values: classification,
+multi_label_classification, detection, or regression. Validate and normalize
+a manifest with:
 
 ```bash
 python scripts/prepare_data.py \
@@ -149,11 +150,9 @@ organizers' official scorer.
 
 ## Paper Results
 
-On the organizer-reported FLARE 2026 Task 3 hidden test, MedParse (`lightbridge`)
-ranked second overall: classification balanced accuracy 0.8204, multi-label F1
-0.5366, Detection F1 0.7267, and regression MAE 15.1703. Public development
-diagnostics use separate task-specific protocols and are reported in the paper;
-they are not hidden-test results.
+On the organizer-reported FLARE 2026 Task 3 hidden test, MedParse ranked
+second overall, with classification balanced accuracy 0.8204, multi-label F1
+0.5366, Detection F1 0.7267, and regression MAE 15.1703.
 
 ## Citation
 
