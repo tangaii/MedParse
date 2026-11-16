@@ -7,10 +7,8 @@ MedGemma vision-language backbone. One image and one task question are mapped
 to a classification option, a label set, image-space boxes, or a bounded scalar.
 This repository is the public implementation accompanying the paper.
 
-Useful references:
-
-- [GitHub repository](https://github.com/tangaii/MedParse)
-- [Checkpoint contract](checkpoints/README.md)
+External checkpoint names and schemas are documented in
+[checkpoints/README.md](checkpoints/README.md).
 
 ## Environments and Requirements
 
@@ -73,11 +71,10 @@ counts; neither is a patient count.
 | REG | Train | 5,852 | 3,277 | Ultrasound 5,150; X-ray 702 |
 | REG | Public validation | -- | -- | No public labeled regression manifest reported |
 
-These are task-specific resources, not one homogeneous image cohort. The
-training records support fitting task-specific components; labeled public
-validation data support development and evaluation where available. The paper
-reports no public labeled regression validation manifest in this summary. No
-challenge images or labels are redistributed by this repository.
+These are task-specific resources, not one homogeneous cohort. Counts are not
+patient counts. Labeled public validation data support development where
+available; no public labeled regression validation manifest is reported here.
+Challenge images and labels are not redistributed.
 
 The BUS-UCLM/BUSI ultrasound data form a separate 175-case labeled cohort for
 the Detection study. This cohort is not the organizer's hidden Detection split
@@ -85,15 +82,11 @@ and is not part of the official hidden-test results.
 
 ## Preprocessing
 
-- Classification, multi-label classification, and Detection correct EXIF
-  orientation, convert to RGB, and resize to `896 x 896` with BICUBIC
-  resampling.
-- Regression uses the original image plus three 15%-overlap aspect-ratio crops
-  for wide or tall images, and four quadrant crops for near-square images.
-- The regression geometry descriptor converts to grayscale, uses `896 x 896`
-  BILINEAR resampling, scales intensity by `255`, computes reflected-boundary
-  Sobel derivatives, and produces a fixed 960-dimensional summary.
-- Cropping is task-specific as above; registration is not used.
+Classification, multi-label classification, and Detection use EXIF-corrected
+RGB images resized to `896 x 896` with BICUBIC resampling. Regression combines
+the original image with overlapping aspect-ratio crops or four quadrant crops
+for near-square images. Its 960-dimensional geometry descriptor uses grayscale,
+BILINEAR resizing, intensity scaling, and reflected-boundary Sobel derivatives.
 
 Prepare an unlabeled local manifest with:
 
@@ -109,28 +102,17 @@ image preprocessing and does not create learned assets.
 
 ## Method Overview
 
-The paper-level implementation has five modules:
+The implementation shares a MedGemma representation interface and adds four
+task-specific predictors. The mapping below links each paper component to its
+primary implementation.
 
-1. **Shared MedGemma Representation Interface** provides prompt rendering,
-   greedy generation, decoder access, and projected image-token features.
-2. **Task-Routed Classification** selects a semantic image-token head or a
-   generation route from a task manifest.
-3. **Evidence-Guided Set Decoding** refines generated proposals with singleton
-   evidence, candidate ranking, probability models, and cardinality-aware F1
-   decoding.
-4. **Frozen Spatial Query Decoding** predicts Detection boxes from image tokens
-   and decoder states rather than generating coordinates as text.
-5. **Retrieval-Refined Quantile Regression** fuses visual, geometry, generated,
-   retrieval, residual, and ordered-quantile estimates into a value in
-   `[0, 100]`.
-
-| Paper module | Primary code |
-| --- | --- |
-| Shared interface | `src/medical_parsing/models/backbone.py` |
-| Classification | `src/medical_parsing/tasks/classification.py` |
-| Evidence-guided set decoding | `src/medical_parsing/tasks/multilabel.py` |
-| Spatial query decoding | `src/medical_parsing/tasks/detection.py` |
-| Quantile regression | `src/medical_parsing/tasks/regression.py` |
+| Component | Function | Primary code |
+| --- | --- | --- |
+| Shared interface | Prompting, generation, decoder states, and image tokens | `src/medical_parsing/models/backbone.py` |
+| Task-routed classification | Semantic image-token head or generation route | `src/medical_parsing/tasks/classification.py` |
+| Evidence-guided set decoding | Candidate refinement and cardinality-aware F1 decoding | `src/medical_parsing/tasks/multilabel.py` |
+| Spatial query decoding | Box prediction from image tokens and decoder states | `src/medical_parsing/tasks/detection.py` |
+| Retrieval-refined quantile regression | Visual, retrieval, residual, and quantile refinement to `[0,100]` | `src/medical_parsing/tasks/regression.py` |
 
 ## Training
 
@@ -149,28 +131,10 @@ caches. The public components are:
 | `regression-residuals` | UID-aligned residual values | `regression_residuals.npz` |
 | `regression-quantile-head` | tokens, geometry, scalar targets | `regression_quantile_head.pt` |
 
-Use the component-specific pattern below; options are shown for representative
-classification, Detection, multi-label, and regression fits:
+Fit a component using its CLI name and feature/target inputs:
 
 ```bash
 python train.py --component <component> [component options]
-
-python train.py --component classification-head \
-  --features cls_tokens.npz --labels semantic_labels.jsonl \
-  --output classification_heads.pt
-
-python train.py --component detection-head \
-  --features detection_features.npz --targets detection_targets.json \
-  --output spatial_query_decoder.pt
-
-python train.py --component multilabel-selector-ranker \
-  --features mlc_candidates.npz \
-  --output multilabel_candidate_selector.cbm \
-  --secondary-output multilabel_candidate_ranker.cbm
-
-python train.py --component regression-reference \
-  --features regression_reference.npz \
-  --output regression_reference.joblib
 ```
 
 Detection fitting defaults are 30 epochs, batch size 256, AdamW with learning
@@ -208,9 +172,9 @@ python inference.py \
   --audit-json run-audit.json
 ```
 
-The required filenames and task-specific assets are listed in
-[checkpoints/README.md](checkpoints/README.md). The runtime validates UID order,
-task identity, legal labels, finite boxes, and the `[0, 100]` regression range.
+The required assets are listed in [checkpoints/README.md](checkpoints/README.md).
+Inference validates UID order, task identity, legal labels, finite boxes, and
+the `[0, 100]` regression range.
 
 ## Evaluation
 
@@ -280,38 +244,14 @@ cohort. The 175-case result is descriptive and is not an independent holdout
 estimate. Both public-cohort results are separate from the official hidden-test
 Detection F1 of 0.7267.
 
-### Earlier development artifact
-
-An earlier reported source-locked development diagnostic used 1,703 rows.
-These historical local scores are distinct from the organizer's final
-hidden-test results and from the task-specific diagnostics above.
-
-| Source | Task | Rows | Metric | Result |
-| --- | --- | ---: | --- | ---: |
-| Earlier development artifact | Overall | 1,703 | overall score | 0.483753 |
-| Earlier development artifact | Classification | 1,126 | balanced accuracy | 0.847607 |
-| Earlier development artifact | Multi-label classification | 477 | micro-F1 | 0.526655 |
-| Earlier development artifact | Regression | 100 | MAE | 11.987337 |
-
-The separate ultrasound Detection cohort is not part of the 1,703-row
-artifact. The official final evaluation has been completed by the challenge
-organizers, as reported above.
-
 ## Reproducibility Notes
 
-Exact fitted values additionally require authorized FLARE data and source
-splits, the `google/medgemma-1.5-4b-it` base model, primary and regression
-PEFT adapters, data-derived route/template/candidate assets, and the fitted
-heads, estimators, retrieval tables, and residual files listed in
-[checkpoints/README.md](checkpoints/README.md). These external assets and
-challenge images are not committed to the repository. Official challenge scores
-require the organizer-provided evaluator.
-
-The checkpoint directory expects the base model and adapters externally, plus
-the route manifest, classification heads, MLC templates/library/selector/
-ranker/probability/residual assets, `spatial_query_decoder.pt`, and regression
-visual/reference/residual/quantile assets. The checkpoint README is the filename
-and schema contract for this bundle.
+Reproducing fitted predictions requires authorized FLARE data, the
+`google/medgemma-1.5-4b-it` base model, both PEFT adapters, data-derived
+manifests, and fitted task assets. These are external and are not committed.
+The generic adapter-training helper does not reproduce the final competition
+adapters. The checkpoint README documents required files and schemas; official
+scores require the organizer's evaluator.
 
 ## Repository Structure
 
@@ -342,17 +282,33 @@ local machine paths.
 
 ## Citation
 
+For the paper, cite the manuscript as follows (publication and DOI metadata
+are not asserted here):
+
 ```bibtex
-@software{tang_medparse,
-  author  = {Tang, Ai},
+@misc{luan2026medparse,
+  author = {Luan, Xiao and Tang, Ai and Yuan, Wei and Zhang, Fuyou},
   title   = {MedParse: A Task-Specialized Vision-Language Framework for
              Medical Image Parsing},
-  url     = {https://github.com/tangaii/MedParse},
-  version = {0.1.0}
+  year   = {2026},
+  note   = {FLARE 2026 Task 3 manuscript}
 }
 ```
 
-Machine-readable citation metadata is provided in [CITATION.cff](CITATION.cff).
+For the software release, use:
+
+```bibtex
+@software{medparse2026software,
+  author  = {Luan, Xiao and Tang, Ai and Yuan, Wei and Zhang, Fuyou},
+  title   = {MedParse: A Task-Specialized Vision-Language Framework for
+             Medical Image Parsing},
+  version = {0.1.0},
+  url     = {https://github.com/tangaii/MedParse}
+}
+```
+
+Machine-readable software citation metadata is provided in
+[CITATION.cff](CITATION.cff).
 
 ## Acknowledgement
 
